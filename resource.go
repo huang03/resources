@@ -2,6 +2,7 @@ package resources
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,13 +18,29 @@ import (
 
 
 分配算法
-预定
+预定,预定超时回收
 
 */
 type PLevel int
 
-type PlanDeliveryFunc func(p plan,node string)
+type PlanDeliveryFunc func(p plan,node string) error
 
+func DefaultPlanDeliverFunc() PlanDeliveryFunc {
+	return func(p plan, node string) error {
+		return nil
+	}
+}
+func NewResource() *Resource {
+	r := &Resource{
+		rmux:    sync.RWMutex{},
+		bks:     make(map[string]*books),
+		nodes:   make(map[string]*NodeResource),
+		total:   0,
+		freeNum: 0,
+		bookNum: 0,
+	}
+	return r
+}
 
 type Resource struct {
 	rmux  sync.RWMutex
@@ -34,31 +51,74 @@ type Resource struct {
 	bookNum int32
 }
 
-func (r *Resource) Plan(key string,data interface{}) plan {
-	return plan{key,data}
-}
-func (r *Resource) CreatePlans(bizName string,delivery PlanDeliveryFunc) *plans  {
-	return &plans{
-		bizName: bizName,
-		pls:     make([]plan,0),
-		delivery: delivery,
+func (r *Resource) String() string  {
+	r.rmux.RLock()
+	defer r.rmux.RUnlock()
+	strs := make([]string,0)
+	strs = append(strs,fmt.Sprintf("total:%d,freeNum:%d,bookNum:%d\n***********nodes***********\n",r.total,r.freeNum,r.bookNum))
+	for _, n := range r.nodes {
+		strs = append(strs,n.String())
 	}
+	strs = append(strs,"***********nodes end***********\n")
+	strs = append(strs,"***********books***********\n")
+	for _, bks := range r.bks {
+		strs = append(strs,bks.String())
+	}
+	strs = append(strs,"***********books end***********\n")
+	return strings.Join(strs,"")
 }
-func (r *Resource) Schedule(pls *plans) error  {
-	if pls.scheduler != nil {
+//func (r *Resource) Plan(key string,data interface{}) plan {
+//	return plan{key,data}
+//}
+//func (r *Resource) CreatePlans(bizName string,delivery PlanDeliveryFunc) *plans  {
+//	return &plans{
+//		bizName: bizName,
+//		pls:     make([]plan,0),
+//		delivery: delivery,
+//	}
+//}
+func (r *Resource) Schedule(pls plans) ([]plan,error)  {
+	if pls.scheduler == nil {
 		pls.scheduler = DeafultScheduler()
+	}
+	if pls.delivery == nil {
+		pls.delivery = DefaultPlanDeliverFunc()
 	}
 	r.rmux.Lock()
 	defer r.rmux.Unlock()
-	result,err := pls.scheduler.Schedule(r,pls)
+	result,err := pls.scheduler.Schedule(r,pls.pls)
 	if err != nil {
-		return err
+		return pls.pls,err
 	}
+	failPlans := make([]plan,0)
+	var failErr error
 	for _,splan :=range result {
+		err = pls.delivery(splan.plan,splan.nodeName)
+		if err != nil {
+			if failErr == nil {
+				failErr = err
+			}
+			fmt.Printf("schedule fail plan:%+v,nodeName:%s,err:%s \n",splan.plan,splan.nodeName,err.Error())
+			failPlans = append(failPlans,splan.plan)
+			continue
+		}
+		fmt.Printf("schedule success plan:%+v,nodeName:%s \n",splan.plan,splan.nodeName)
 		r.decr(splan.nodeName,1)
-		pls.delivery(splan.plan,splan.nodeName)
 	}
-	return nil
+	return failPlans,failErr
+}
+func (r *Resource) Reset()  {
+	r.rmux.Lock()
+	defer r.rmux.Unlock()
+	r.freeNum = 0
+	r.bookNum = 0
+	for _, node := range r.nodes {
+		node.freeNum = node.total
+		node.bookNum = 0
+		r.freeNum += node.freeNum
+	}
+
+	r.bks = make(map[string]*books,0)
 }
 func (r *Resource) Recycle(nodeName string,delta int32)  {
 	r.rmux.Lock()
@@ -68,28 +128,81 @@ func (r *Resource) Recycle(nodeName string,delta int32)  {
 	}
 	r.incr(nodeName,delta)
 }
-func (r *Resource) Book(bizName string,timeOut time.Duration,num int32) error {
+func (r *Resource) DoBook(bizName string,pls plans) ([]plan,error) {
+	if pls.delivery == nil {
+		return pls.pls,fmt.Errorf("bizName:%s delivery is nil",bizName)
+	}
+	r.rmux.Lock()
+	defer r.rmux.Unlock()
+	if _,ok := r.bks[bizName];ok {
+		return pls.pls,fmt.Errorf("bizName:%s don't exist",bizName)
+	}
+	bks := r.bks[bizName]
+	if bks.Expire() {
+		return pls.pls,fmt.Errorf("bizName:%s has expireAt:%d",bizName,bks.expireAt.Unix())
+	}
+	total := 0
+	for _, b := range bks.res {
+		total += int(b.total)
+	}
+	if total<len(pls.pls){
+		return pls.pls,fmt.Errorf("bizName:%s need:%d,but book total is %d",bizName,len(pls.pls),total)
+	}
+	failPlans := make([]plan,0)
+	var failErr error
+	index := 0
+	for _, bk := range bks.res {
+		if bk.total<1{
+			continue
+		}
+		err :=  pls.delivery(pls.pls[index],bk.node)
+		if  err != nil && failErr == nil {
+			failErr = err
+		}
+		if err != nil {
+			failPlans = append(failPlans,pls.pls[index])
+			continue
+		}
+		bk.total--
+		r.bookNum--
+	}
+	total = 0
+	for _, b := range bks.res {
+		total += int(b.total)
+	}
+	if total == 0 {
+		delete(r.bks,bizName)
+	}
+	return failPlans,failErr
+}
+func (r *Resource) Book(bizName string,timeOut time.Duration,num int32,scheduler Scheduler) error {
 	if num<1 {
 		return fmt.Errorf("book num < 1")
 	}
 
-	sche := DeafultScheduler()
 	r.rmux.Lock()
 	defer r.rmux.Unlock()
 	if _,ok := r.bks[bizName];ok {
 		return fmt.Errorf("bizName:%s exist",bizName)
 	}
-	nodes,err := sche.BooK(r,num)
+	nodes,err := scheduler.BooK(r,num)
 	if err != nil {
 		return err
 	}
 
 	bk := &books{
+		bizName: bizName,
 		timeout:    timeOut,
-		createTime: time.Now(),
+		expireAt: time.Now().Add(timeOut),
 		res:        make(map[string]*book,0),
 	}
 	for _, bookInfo := range nodes {
+		fmt.Printf("book nodeName:%s,total:%d success \n",bookInfo.nodeName,bookInfo.total)
+		if _,ok :=bk.res[bookInfo.nodeName];ok {
+			bk.res[bookInfo.nodeName].total += bookInfo.total
+			r.incrBook(bookInfo.nodeName,bookInfo.total)
+			continue
+		}
 		bk.res[bookInfo.nodeName] = &book{
 			node:  bookInfo.nodeName,
 			total: bookInfo.total,
@@ -101,13 +214,15 @@ func (r *Resource) Book(bizName string,timeOut time.Duration,num int32) error {
 }
 func (r *Resource) incrBook(nodeName string,delta int32)  {
 	r.freeNum -=delta
+	r.bookNum +=delta
 	r.nodes[nodeName].incrBook(delta)
-	//r.nodes[nodeName].decr(delta)
+	r.nodes[nodeName].decr(delta)
 }
 func (r *Resource) decrBook(nodeName string,delta int32)  {
 	r.freeNum +=delta
+	r.bookNum -=delta
 	r.nodes[nodeName].decrBook(delta)
-	//r.nodes[nodeName].incr(delta)
+	r.nodes[nodeName].incr(delta)
 }
 func (r *Resource) incr(nodeName string,delta int32)  {
 	r.freeNum +=delta
@@ -128,12 +243,13 @@ func (r *Resource) AddNode(nr *NodeResource) bool  {
 	r.freeNum += nr.freeNum
 	return  true
 }
-func (r Resource) RemoveNode(nr NodeResource) bool  {
+func (r *Resource) RemoveNode(nodeName string) bool  {
 	r.rmux.Lock()
 	defer r.rmux.Unlock()
-	if _,ok := r.nodes[nr.nodeName]; !ok {
+	if _,ok := r.nodes[nodeName]; !ok {
 		return true
 	}
+	nr := r.nodes[nodeName]
 	//预定资源的处理？？？
 	if nr.bookNum >0 {
 
@@ -144,7 +260,7 @@ func (r Resource) RemoveNode(nr NodeResource) bool  {
 	delete(r.nodes,nr.nodeName)
 	return true
 }
-func (r *Resource) NewNodeResource(nodeName string,total int32) *NodeResource {
+func  NewNodeResource(nodeName string,total int32) *NodeResource {
 	return &NodeResource{
 		priority: PLevel(50),
 		nodeName: nodeName,
@@ -152,6 +268,9 @@ func (r *Resource) NewNodeResource(nodeName string,total int32) *NodeResource {
 		freeNum:  total,
 		bookNum:  0,
 	}
+}
+func (nr *NodeResource) String() string  {
+	return fmt.Sprintf("nodeName:%s,priority:%d,total:%d,freeNum:%d,bookNum:%d \n",nr.nodeName,nr.priority,nr.total,nr.freeNum,nr.bookNum)
 }
 func (nr *NodeResource) incr(delta int32)  {
 	nr.freeNum += delta
@@ -173,6 +292,7 @@ func (nr *NodeResource) Priority(pl PLevel)  {
 	}
 	nr.priority = pl
 }
+
 type NodeResource struct {
 	priority PLevel
 	nodeName string
@@ -182,9 +302,25 @@ type NodeResource struct {
 }
 
 type books struct {
+	bizName string
 	timeout time.Duration
-	createTime time.Time
+	expireAt time.Time
 	res map[string]*book
+}
+
+func (bks books) Expire() bool {
+	if bks.expireAt.Unix()>=time.Now().Unix(){
+		return false
+	}
+	return true
+}
+func (bks *books) String() string {
+	strs := make([]string,0)
+	strs = append(strs,fmt.Sprintf("books bizName:%s,createTime:%d,timeout:%ds\n",bks.bizName,bks.expireAt.Unix(),bks.timeout/time.Second))
+	for _, b := range bks.res {
+		strs = append(strs,fmt.Sprintf("book nodeName:%s,total:%d\n",b.node,b.total))
+	}
+	return strings.Join(strs,"")
 }
 //预定资源
 type book struct {
@@ -197,14 +333,6 @@ type plans struct {
 	bizName string
 	pls []plan
 }
-//func newPlans(plan ...plan) *plans {
-//	return &plans{pls: plan}
-//}
-type plan struct {
-	Key string
-	Data interface{}
-}
-
 func (p *plans) Append(key string,data interface{})  {
 	p.pls = append(p.pls,plan{
 		Key:  key,
@@ -214,3 +342,20 @@ func (p *plans) Append(key string,data interface{})  {
 func (p *plans) Scheduler(scheduler Scheduler)  {
 	p.scheduler = scheduler
 }
+func NewPlans(bizName string,delivery PlanDeliveryFunc,scheduler Scheduler,pls ...plan) plans {
+	return plans{
+		bizName: bizName,
+		delivery: delivery,
+		scheduler: scheduler,
+		pls: pls,
+	}
+}
+type plan struct {
+	Key string
+	Data interface{}
+}
+
+func NewPlan(key string,data interface{}) plan {
+	return plan{key,data}
+}
+
