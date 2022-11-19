@@ -1,4 +1,4 @@
-package resources
+package resource
 
 import (
 	"fmt"
@@ -293,9 +293,9 @@ func (nr *NodeResource) Priority(pl PLevel)  {
 type NodeResource struct {
 	priority PLevel
 	nodeName string
-	total int32 //总资源
-	freeNum int32
-	bookNum int32
+	total    int32 //总资源
+	freeNum  int32
+	bookNum  int32
 }
 
 type books struct {
@@ -326,12 +326,12 @@ type book struct {
 }
 type plans struct {
 	scheduler Scheduler
-	delivery PlanDeliveryFunc
-	bizName string
-	pls []plan
+	delivery  PlanDeliveryFunc
+	bizName   string
+	pls       []plan
 }
 func (p *plans) Append(key string,data interface{})  {
-	p.pls = append(p.pls,plan{
+	p.pls = append(p.pls, plan{
 		Key:  key,
 		Data: data,
 	})

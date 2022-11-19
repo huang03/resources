@@ -1,4 +1,4 @@
-package resources
+package resource
 
 import (
 	"fmt"
@@ -14,7 +14,7 @@ type Strategy interface {
 }
 type SchePlan struct {
 	nodeName string
-	plan plan
+	plan     plan
 }
 type ScheBook struct {
 	nodeName string
@@ -32,7 +32,7 @@ func (s *StandardMode) Schedule(resource *Resource,pls []plan) ([]SchePlan,error
 	index := 0
 	for _, node := range nodes {
 		for j := int32(0); j < node.total; j++ {
-			list = append(list,SchePlan{
+			list = append(list, SchePlan{
 				nodeName: node.name,
 				plan:   pls[index],
 			})
@@ -49,7 +49,7 @@ func (s *StandardMode) BooK(resource *Resource, num int32) ([]ScheBook, error) {
 	}
 	list := make([]ScheBook,0,len(nodes))
 	for _, node := range nodes {
-		list = append(list,ScheBook{
+		list = append(list, ScheBook{
 			nodeName: node.name,
 			total:    node.total,
 		})
@@ -70,7 +70,7 @@ func (p *LeastNodeScheduler) Choice(resource *Resource,num int32) ([]Node,error)
 	total := int32(0)
 	for _, nodeResource := range resource.nodes {
 		if nodeResource.freeNum >0 {
-			nodes = append(nodes,Node{
+			nodes = append(nodes, Node{
 				name:     nodeResource.nodeName,
 				priority: nodeResource.priority,
 				total:    nodeResource.freeNum,
@@ -101,7 +101,7 @@ func (p *LeastNodeScheduler) Choice(resource *Resource,num int32) ([]Node,error)
 			index++
 			continue
 		}
-		choiceNodes = append(choiceNodes,Node{
+		choiceNodes = append(choiceNodes, Node{
 			name:     nodes[index].name,
 			priority: 1,
 			total:    1,
@@ -131,7 +131,7 @@ func (s *PollingNodeScheduler)  Choice(resource *Resource,num int32) ([]Node,err
 	nodeRes := make([]NodeResource,0,nodeCt)
 	total := int32(0)
 	for _, nr := range resource.nodes {
-		nodeRes = append(nodeRes,NodeResource{
+		nodeRes = append(nodeRes, NodeResource{
 			priority: nr.priority,
 			nodeName: nr.nodeName,
 			total:    nr.total,
@@ -150,7 +150,7 @@ func (s *PollingNodeScheduler)  Choice(resource *Resource,num int32) ([]Node,err
 	for num>0 {
 		index := s.index%nodeCt
 		if nodeRes[index].freeNum>0 {
-			nodes = append(nodes,Node{
+			nodes = append(nodes, Node{
 				name:     nodeRes[index].nodeName,
 				priority: nodeRes[index].priority,
 				total:    1,
@@ -178,7 +178,7 @@ func (s SameNodeScheduler)  Choice(resource *Resource,num int32) ([]Node,error) 
 	total := int32(0)
 	for _, nodeResource := range resource.nodes {
 		if nodeResource.freeNum >0 {
-			nodes = append(nodes,Node{
+			nodes = append(nodes, Node{
 				name:     nodeResource.nodeName,
 				priority: nodeResource.priority,
 				total:    nodeResource.freeNum,
@@ -209,7 +209,7 @@ func (s SameNodeScheduler)  Choice(resource *Resource,num int32) ([]Node,error) 
 		if nodes[i].total<resNum {
 			resNum = nodes[i].total
 		}
-		choiceNodes = append(choiceNodes,Node{
+		choiceNodes = append(choiceNodes, Node{
 			name:     nodes[i].name,
 			priority: 1,
 			total:    resNum,
@@ -236,7 +236,7 @@ func (p PriorityScheduler) Choice(resource *Resource,num int32) ([]Node,error)  
 	total := int32(0)
 	for _, nodeResource := range resource.nodes {
 		if nodeResource.freeNum >0 {
-			nodes = append(nodes,Node{
+			nodes = append(nodes, Node{
 				name:     nodeResource.nodeName,
 				priority: nodeResource.priority,
 				total:    nodeResource.freeNum,
@@ -260,7 +260,7 @@ func (p PriorityScheduler) Choice(resource *Resource,num int32) ([]Node,error)  
 			index++
 		}
 		if nodes[index].total>0 {
-			choiceNodes = append(choiceNodes,Node{
+			choiceNodes = append(choiceNodes, Node{
 				name:     nodes[index].name,
 				priority: 1,
 				total:    1,
@@ -272,9 +272,9 @@ func (p PriorityScheduler) Choice(resource *Resource,num int32) ([]Node,error)  
 }
 
 type Node struct {
-	name string
+	name     string
 	priority PLevel
-	total int32
+	total    int32
 }
 
 
