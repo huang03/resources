@@ -27,6 +27,7 @@ type PlanDeliveryFunc func(p plan,node string) error
 
 func DefaultPlanDeliverFunc() PlanDeliveryFunc {
 	return func(p plan, node string) error {
+		fmt.Printf("plan:%v,nodeName:%s\n",p,node)
 		return nil
 	}
 }
@@ -67,16 +68,7 @@ func (r *Resource) String() string  {
 	strs = append(strs,"***********books end***********\n")
 	return strings.Join(strs,"")
 }
-//func (r *Resource) Plan(key string,data interface{}) plan {
-//	return plan{key,data}
-//}
-//func (r *Resource) CreatePlans(bizName string,delivery PlanDeliveryFunc) *plans  {
-//	return &plans{
-//		bizName: bizName,
-//		pls:     make([]plan,0),
-//		delivery: delivery,
-//	}
-//}
+
 func (r *Resource) Schedule(pls plans) ([]plan,error)  {
 	if pls.scheduler == nil {
 		pls.scheduler = DeafultScheduler()
@@ -86,6 +78,7 @@ func (r *Resource) Schedule(pls plans) ([]plan,error)  {
 	}
 	r.rmux.Lock()
 	defer r.rmux.Unlock()
+	r.recycleBook()
 	result,err := pls.scheduler.Schedule(r,pls.pls)
 	if err != nil {
 		return pls.pls,err
@@ -128,13 +121,20 @@ func (r *Resource) Recycle(nodeName string,delta int32)  {
 	}
 	r.incr(nodeName,delta)
 }
+func (r *Resource) recycleBook()  {
+	for bizName, bks := range r.bks {
+		if bks.Expire() {
+			delete(r.bks,bizName)
+		}
+	}
+}
 func (r *Resource) DoBook(bizName string,pls plans) ([]plan,error) {
 	if pls.delivery == nil {
 		return pls.pls,fmt.Errorf("bizName:%s delivery is nil",bizName)
 	}
 	r.rmux.Lock()
 	defer r.rmux.Unlock()
-	if _,ok := r.bks[bizName];ok {
+	if _,ok := r.bks[bizName];!ok {
 		return pls.pls,fmt.Errorf("bizName:%s don't exist",bizName)
 	}
 	bks := r.bks[bizName]
@@ -142,8 +142,10 @@ func (r *Resource) DoBook(bizName string,pls plans) ([]plan,error) {
 		return pls.pls,fmt.Errorf("bizName:%s has expireAt:%d",bizName,bks.expireAt.Unix())
 	}
 	total := 0
+	nodeNames := make([]string,0,len(bks.res))
 	for _, b := range bks.res {
 		total += int(b.total)
+		nodeNames = append(nodeNames,b.node)
 	}
 	if total<len(pls.pls){
 		return pls.pls,fmt.Errorf("bizName:%s need:%d,but book total is %d",bizName,len(pls.pls),total)
@@ -151,24 +153,32 @@ func (r *Resource) DoBook(bizName string,pls plans) ([]plan,error) {
 	failPlans := make([]plan,0)
 	var failErr error
 	index := 0
-	for _, bk := range bks.res {
-		if bk.total<1{
+	for _, pl := range pls.pls {
+		var bk *book
+		for index<len(nodeNames){
+			bk = bks.res[nodeNames[index]]
+			if bk.total<1{
+				index++
+				continue
+			}
+			break
+		}
+		if bk == nil {
+			failPlans = append(failPlans,pl)
 			continue
 		}
-		err :=  pls.delivery(pls.pls[index],bk.node)
+		err :=  pls.delivery(pl,bk.node)
 		if  err != nil && failErr == nil {
 			failErr = err
 		}
 		if err != nil {
-			failPlans = append(failPlans,pls.pls[index])
+			failPlans = append(failPlans,pl)
 			continue
 		}
+		r.nodes[bk.node].bookNum--
+		total--
 		bk.total--
 		r.bookNum--
-	}
-	total = 0
-	for _, b := range bks.res {
-		total += int(b.total)
 	}
 	if total == 0 {
 		delete(r.bks,bizName)
@@ -182,6 +192,7 @@ func (r *Resource) Book(bizName string,timeOut time.Duration,num int32,scheduler
 
 	r.rmux.Lock()
 	defer r.rmux.Unlock()
+	r.recycleBook()
 	if _,ok := r.bks[bizName];ok {
 		return fmt.Errorf("bizName:%s exist",bizName)
 	}
@@ -316,7 +327,7 @@ func (bks books) Expire() bool {
 }
 func (bks *books) String() string {
 	strs := make([]string,0)
-	strs = append(strs,fmt.Sprintf("books bizName:%s,createTime:%d,timeout:%ds\n",bks.bizName,bks.expireAt.Unix(),bks.timeout/time.Second))
+	strs = append(strs,fmt.Sprintf("books bizName:%s,expireAt:%d,timeout:%ds\n",bks.bizName,bks.expireAt.Unix(),bks.timeout/time.Second))
 	for _, b := range bks.res {
 		strs = append(strs,fmt.Sprintf("book nodeName:%s,total:%d\n",b.node,b.total))
 	}
