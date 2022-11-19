@@ -7,20 +7,6 @@ import (
 	"time"
 )
 
-/*
-1.资源管理， node，node处理资源的能力，node 处理能力
-2.PUSH,GET, Reset,资源矫正
-3.分配节点策略，优先分配同一个node,还是优先分配到不懂节点，或者根据节点能力来优先分配
-4.如果资源不足时的分配策略，
-5.预定资源、预定超时
-6.任务优先级。
-7.任务投递
-
-
-分配算法
-预定,预定超时回收
-
-*/
 type PLevel int
 
 type PlanDeliveryFunc func(p plan,node string) error
