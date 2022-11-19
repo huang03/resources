@@ -15,17 +15,13 @@ func TestSchedule(t *testing.T) {
 	resources.AddNode(node2)
 	resources.AddNode(node3)
 	fmt.Println(resources)
-
 	//resources.RemoveNode("node-1")
 	//fmt.Println(resources)
-
 	fmt.Println("-------------------------------")
 	//scheduler := NewPollingNodeScheduler()
-
 	//scheduler := NewPriorityScheduler()
 	//node2.Priority(PLevel(99))
 	//node3.Priority(PLevel(98))
-
 	//scheduler := NewLeastNodeScheduler()
 	scheduler := NewSameNodeScheduler()
 	nodeNames := make([]string,0)
